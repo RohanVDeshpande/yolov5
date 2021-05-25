@@ -442,9 +442,11 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, GIoUpp=False, DIoU=False, CI
                     alpha = v / (v - iou + (1 + eps))
                 return iou - (rho2 / c2 + v * alpha)  # CIoU
         else:  # GIoU https://arxiv.org/pdf/1902.09630.pdf
-            c_area = cw * ch + eps  # convex area
+            base_c_area = cw * ch + eps  # convex area
 
-            if GIoUpp:
+            if GIoU:
+                c_area = base_c_area
+            elif GIoUpp:
                 cut = - torch.clamp(b1_x2 - b2_x2, min=0) * torch.clamp(b1_y1 - b2_y1, min=0) \
                       - torch.clamp(-b1_x2 + b2_x2, min=0) * torch.clamp(-b1_y1 + b2_y1, min=0) \
                       - torch.clamp(b1_x1 - b2_x1, min=0) * torch.clamp(b1_y2 - b2_y2, min=0) \
@@ -453,7 +455,7 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, GIoUpp=False, DIoU=False, CI
                       - torch.clamp(-b1_x2 + b2_x2, min=0) * torch.clamp(-b2_y2 + b1_y2, min=0) \
                       - torch.clamp(b1_x1 - b2_x1, min=0) * torch.clamp(b2_y1 - b1_y1, min=0) \
                       - torch.clamp(-b1_x1 + b2_x1, min=0) * torch.clamp(-b2_y1 + b1_y1, min=0)
-                c_area -= cut / 2
+                c_area = base_c_area - cut / 2
 
             return iou - (c_area - union) / c_area  # GIoU or GIoUpp
     else:
