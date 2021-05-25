@@ -92,26 +92,25 @@ class ComputeLoss:
         device = next(model.parameters()).device  # get model device
         h = model.hyp  # hyperparameters
         self.loss_type = loss_type
-        if loss_type == "ciou":
 
-            # Define criteria
-            BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device))
-            BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device))
+        # Define criteria
+        BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device))
+        BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device))
 
-            # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
-            self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))  # positive, negative BCE targets
+        # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
+        self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))  # positive, negative BCE targets
 
-            # Focal loss
-            g = h['fl_gamma']  # focal loss gamma
-            if g > 0:
-                BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
+        # Focal loss
+        g = h['fl_gamma']  # focal loss gamma
+        if g > 0:
+            BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
 
-            det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
-            self.balance = {3: [4.0, 1.0, 0.4]}.get(det.nl, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7
-            self.ssi = list(det.stride).index(16) if autobalance else 0  # stride 16 index
-            self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, model.gr, h, autobalance
-            for k in 'na', 'nc', 'nl', 'anchors':
-                setattr(self, k, getattr(det, k))
+        det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
+        self.balance = {3: [4.0, 1.0, 0.4]}.get(det.nl, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7
+        self.ssi = list(det.stride).index(16) if autobalance else 0  # stride 16 index
+        self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, model.gr, h, autobalance
+        for k in 'na', 'nc', 'nl', 'anchors':
+            setattr(self, k, getattr(det, k))
 
     def __call__(self, p, targets):  # predictions, targets, model
         device = targets.device
@@ -134,31 +133,27 @@ class ComputeLoss:
                 iou = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, GIoU=(self.loss_type == "giou"), GIoUpp=(self.loss_type == "gioupp"), CIoU=(self.loss_type == "ciou"))  # iou(prediction, target)
                 lbox += (1.0 - iou).mean()  # iou loss
 
-                
-                if self.loss_type == "ciou":
-                    # Objectness
-                    tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
+                # Objectness
+                tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
 
-                    # Classification
-                    if self.nc > 1:  # cls loss (only if multiple classes)
-                        t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
-                        t[range(n), tcls[i]] = self.cp
-                        lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                # Classification
+                if self.nc > 1:  # cls loss (only if multiple classes)
+                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
+                    t[range(n), tcls[i]] = self.cp
+                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
 
-                    # Append targets to text file
-                    # with open('targets.txt', 'a') as file:
-                    #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
-            if self.loss_type == "ciou":
-                obji = self.BCEobj(pi[..., 4], tobj)
-                lobj += obji * self.balance[i]  # obj loss
-                if self.autobalance:
-                    self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
-        if self.loss_type == "ciou":
+                # Append targets to text file
+                # with open('targets.txt', 'a') as file:
+                #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
+            obji = self.BCEobj(pi[..., 4], tobj)
+            lobj += obji * self.balance[i]  # obj loss
             if self.autobalance:
-                self.balance = [x / self.balance[self.ssi] for x in self.balance]
-            lbox *= self.hyp['box']
-            lobj *= self.hyp['obj']
-            lcls *= self.hyp['cls']
+                self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
+        if self.autobalance:
+            self.balance = [x / self.balance[self.ssi] for x in self.balance]
+        lbox *= self.hyp['box']
+        lobj *= self.hyp['obj']
+        lcls *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 
         loss = lbox + lobj + lcls
